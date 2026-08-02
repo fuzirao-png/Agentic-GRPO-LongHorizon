@@ -1,0 +1,150 @@
+# ============================================================================
+# PRM-Lite v5 + LATA v2-Pro (Optimized, 400 steps with early stopping)
+#
+# System-level optimizations over baseline Joint:
+#   1. Algorithm: grpo_lata_v2 with adaptive length normalization + dynamic alpha
+#   2. Reward: prm_lite_v5 with curriculum process weighting
+#   3. Training: larger group size (12), cosine LR schedule, advantage clipping
+#   4. Rollout: temperature annealing, better exploration
+#   5. Regularization: entropy bonus, stronger KL with adaptive coef
+# ============================================================================
+hydra:
+  searchpath:
+    - pkg://verl/trainer/config
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+data:
+  train_files: experiments/vanilla/train.parquet
+  val_files: experiments/vanilla/val.parquet
+  train_batch_size: 6  # Larger batch for more stable gradient estimates
+  max_prompt_length: 8192
+  max_response_length: 16384  # Longer responses to allow deeper reasoning
+  return_raw_chat: True
+  tool_config_path: configs/tool_config/tau_bench_airline_tools.yaml
+  # Shuffle training data for better diversity
+  shuffle: True
+
+actor_rollout_ref:
+  model:
+    path: experiments/sft_lora_merged
+    enable_gradient_checkpointing: true
+    lora_rank: 32  # Higher rank for better expressiveness (v4 used 16)
+    lora_alpha: 64  # Scaled with rank
+    use_fused_kernels: true
+    fused_kernel_options:
+      impl_backend: torch
+    override_config:
+      attn_implementation: flash_attention_2
+  actor:
+    fsdp_config:
+      optimizer_offload: true
+      param_offload: true
+      model_dtype: bf16
+    optim:
+      lr: 3.0e-6  # Lower LR for more stable training (v4 used 5e-6)
+      # Cosine learning rate schedule with warmup
+      lr_scheduler: cosine
+      warmup_steps: 20  # Warmup to prevent initial instability
+      min_lr: 1.0e-7
+    use_kl_loss: True
+    kl_loss_coef: 0.02  # Slightly stronger KL to prevent policy drift (v4 used 0.01)
+    kl_loss_type: low_var_kl
+    # Entropy bonus to encourage exploration
+    entropy_coeff: 0.005
+    use_fused_kernels: true
+    ppo_mini_batch_size: 6
+    ppo_micro_batch_size_per_gpu: 2
+    ppo_epochs: 2  # Multiple epochs per batch for better sample efficiency
+    cliprange: 0.2  # Standard PPO clip
+    cliprange_value: 0.2
+    vf_coeff: 0.5  # If using critic (can be 0 for pure GRPO)
+  rollout:
+    name: "vllm"
+    mode: async
+    agent:
+      default_agent_loop: tool_agent
+    multi_turn:
+      enable: True
+      format: "hermes"
+      max_user_turns: 18  # Slightly more turns allowed
+      max_assistant_turns: 18
+      tool_config_path: configs/tool_config/tau_bench_airline_tools.yaml
+      interaction_config_path: configs/interaction_config/tau_bench_airline_prm_lite_v5.yaml
+    n: 12  # Larger group size for better advantage estimates (v4 used 8)
+    # Temperature schedule: higher early for exploration, lower later for exploitation
+    temperature: 0.8  # Slightly higher for better exploration (v4 used 0.7)
+    top_p: 0.92
+    top_k: -1  # Disable top-k for more diversity
+    tensor_model_parallel_size: 1
+    calculate_log_probs: true
+    gpu_memory_utilization: 0.55
+    free_cache_engine: true
+    max_num_seqs: 16  # Higher concurrency
+    max_model_len: 32768  # Match max_response_length + max_prompt_length
+    max_num_batched_tokens: 32768
+    log_prob_micro_batch_size_per_gpu: 2
+    val_kwargs:
+      n: 4  # Multiple samples during validation for more reliable pass@k
+      temperature: 0.7
+      top_p: 0.9
+  ref:
+    fsdp_config:
+      optimizer_offload: true
+      param_offload: true
+      use_fused_kernels: true
+      model_dtype: bf16
+    model:
+      path: experiments/sft_lora_merged
+      override_config:
+        attn_implementation: flash_attention_2
+    log_prob_micro_batch_size_per_gpu: 2
+
+algorithm:
+  # Use the enhanced LATA v2 algorithm
+  adv_estimator: grpo_lata_v2
+  norm_adv_by_std_in_grpo: True
+  kl_ctrl:
+    type: fixed
+    kl_coef: 0.02
+    # Adaptive KL controller settings (if type: adaptive)
+    target_kl: 0.05
+    horizon: 100
+  rollout_correction:
+    bypass_mode: true
+  # Turn discount configuration for LATA v2
+  turn_discount:
+    enable: true
+    alpha: 1.04  # Slightly lower than v4's 1.05 for more balanced weighting
+  # LATA v2 specific parameters
+  lata_v2:
+    short_len_thresh: 800
+    long_len_thresh: 2200
+    adv_clip_range: 2.5  # Clip advantages to reduce variance
+    entropy_coef: 0.005
+  # Entropy bonus for exploration
+  entropy_coeff: 0.003
+
+trainer:
+  total_epochs: 80
+  total_training_steps: 400  # Fewer steps but better utilized (v4 used 300)
+  save_freq: 25  # Save more frequently
+  test_freq: 25  # Evaluate more frequently
+  default_local_dir: experiments/prm_lite_lata_v2_pro/checkpoints
+  logger: ['console', 'swanlab']
+  project_name: agentic-grpo-longhorizon
+  experiment_name: prm_lite_v5_lata_v2_pro_400step
+  n_gpus_per_node: 1
+  nnodes: 1
+  # Early stopping configuration
+  early_stopping:
+    enable: true
+    patience: 6  # Stop if no improvement for 6 evaluations (150 steps)
+    metric: "overall_pass"
+    mode: "max"
+  val_before_train: True
+  # Save best checkpoint based on validation
+  save_best_checkpoint: true
+  best_metric: "overall_pass"
