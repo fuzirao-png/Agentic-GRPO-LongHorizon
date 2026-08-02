@@ -239,13 +239,3 @@ bash eval_exp4_prm_lite_lata.sh
 > **为什么重要**：大多数 RLHF/RLAIF 工作聚焦单轮问答或代码生成。本项目 tackle 更难的问题 —— **多轮、多工具、部分可观测的对话智能体** —— 在这里 vanilla GRPO 会灾难性失败。PRM-Lite + LATA 联合设计提供了一条有原理支撑、轻量且可解释的通往稳定训练的路径，无需昂贵的学习式奖励模型。
 
 ---
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=qiqihezh%2Fagentic-grpo-longhorizon&type=date&legend=bottom-right">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=qiqihezh/agentic-grpo-longhorizon&type=date&theme=dark&legend=bottom-right" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=qiqihezh/agentic-grpo-longhorizon&type=date&legend=bottom-right" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=qiqihezh/agentic-grpo-longhorizon&type=date&legend=bottom-right" />
- </picture>
-</a>
